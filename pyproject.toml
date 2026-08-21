@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "object-agnostic-prompt-training"
+version = "0.1.0"
+description = "Shallow object-agnostic prompt learning for anomaly detection"
+requires-python = ">=3.10"
+dependencies = [
+  "ftfy>=6.1",
+  "numpy>=1.24",
+  "Pillow>=9.0",
+  "PyYAML>=6.0",
+  "regex>=2022.0",
+  "torch>=2.0",
+  "torchvision>=0.15",
+  "tqdm>=4.64",
+]
+
+[project.scripts]
+train-object-agnostic-prompts = "object_agnostic_prompt_attack.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

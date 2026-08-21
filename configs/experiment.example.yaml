@@ -1,0 +1,62 @@
+prompt:
+  n_ctx: 12
+  normal_suffix: "object."
+  abnormal_suffix: "damaged object."
+  init_std: 0.02
+  context_length: 77
+  category_specific: false
+  deep_text_prompt_tuning: false
+
+model:
+  backend: anomalyclip_public_clip
+  anomalyclip_root: null
+  clip_model_name: "ViT-L/14@336px"
+  clip_download_root: null
+  image_size: 518
+  feature_layers: [6, 12, 18, 24]
+  feature_map_indices: [0, 1, 2, 3]
+  temperature: 0.07
+  use_dpam: false
+  device: auto
+
+data:
+  datasets: [mvtec, visa]
+  training_mode: per_source_dataset
+  mvtec_root: null
+  visa_root: null
+  mvtec_training_manifest: null
+  visa_training_manifest: null
+  # Used only when an existing attack_train manifest is not supplied.
+  automatic_evaluation_fraction: 0.5
+
+training:
+  objective: anomalyclip_image_ce_pixel_focal_dice
+  image_loss: cross_entropy
+  pixel_losses: [focal, dice_abnormal, dice_normal]
+  pixel_loss_weight: 4.0
+  use_pixel_masks: true
+  normal_mask_policy: all_zero
+  optimizer: Adam
+  learning_rate: 0.001
+  betas: [0.5, 0.999]
+  epochs: 15
+  batch_size: 8
+  num_workers: 0
+  seed: 111
+  checkpoint_selection: fixed_epoch
+  selected_epoch: 15
+  freeze_clip: true
+  train_prompt_parameters_only: true
+
+artifacts:
+  output_root: artifacts/prompts
+  save_prompt_checkpoint: true
+  save_training_history_csv: true
+  save_resolved_config: true
+  save_manifest: true
+  save_all_epoch_checkpoints: false
+  save_clip_backbone: false
+  overwrite: false
+
+deferred:
+  prompt_training_modes: [joint_datasets, per_source_category]
