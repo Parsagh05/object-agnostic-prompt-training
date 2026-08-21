@@ -42,6 +42,7 @@ training:
   epochs: 15
   batch_size: 8
   num_workers: 0
+  show_progress: true
   seed: 111
   checkpoint_selection: fixed_epoch
   selected_epoch: 15

@@ -19,6 +19,7 @@ import PIL
 import torch
 from torch.utils.data import DataLoader
 import yaml
+from tqdm.auto import tqdm
 
 from .checkpoint import load_prompt_checkpoint, save_prompt_checkpoint, sha256_file
 from .config import ExperimentConfig
@@ -139,14 +140,28 @@ def train_prompt_model(
         raise RuntimeError("Optimizer parameter set is not exactly the two prompt contexts")
     criterion = AnomalyCLIPPromptLoss(pixel_weight=training.pixel_loss_weight)
     history: list[EpochHistory] = []
-    for epoch in range(1, training.epochs + 1):
+    dataset_name = samples[0].dataset if samples else "dataset"
+    epoch_iterator = tqdm(
+        range(1, training.epochs + 1),
+        desc=f"{dataset_name} epochs",
+        unit="epoch",
+        disable=not training.show_progress,
+    )
+    for epoch in epoch_iterator:
         model.clip_model.eval()
         model.text_encoder.eval()
         model.prompt_learner.train()
         totals = {"total": 0.0, "image": 0.0, "pixel": 0.0, "weighted": 0.0}
         seen = 0
         batches = 0
-        for batch in loader:
+        batch_iterator = tqdm(
+            loader,
+            desc=f"{dataset_name} epoch {epoch:02d}",
+            unit="batch",
+            leave=False,
+            disable=not training.show_progress,
+        )
+        for batch in batch_iterator:
             images = batch["image"].to(model.device, non_blocking=True)
             masks = batch["mask"].to(model.device, non_blocking=True)
             labels = batch["label"].to(model.device, non_blocking=True)
@@ -169,6 +184,12 @@ def train_prompt_model(
             totals["image"] += float(breakdown.image.detach()) * batch_size
             totals["pixel"] += float(breakdown.pixel.detach()) * batch_size
             totals["weighted"] += float(breakdown.pixel_weighted.detach()) * batch_size
+            batch_iterator.set_postfix(
+                total=f"{float(breakdown.total.detach()):.4f}",
+                image=f"{float(breakdown.image.detach()):.4f}",
+                pixel=f"{float(breakdown.pixel.detach()):.4f}",
+                refresh=False,
+            )
         if not seen:
             raise RuntimeError("Prompt-training loader produced no samples")
         row = EpochHistory(
@@ -182,9 +203,10 @@ def train_prompt_model(
             samples=seen,
         )
         history.append(row)
-        print(
-            f"[{epoch:02d}/{training.epochs:02d}] total={row.total_loss:.6f} "
-            f"image={row.image_loss:.6f} pixel={row.pixel_loss:.6f}"
+        epoch_iterator.set_postfix(
+            total=f"{row.total_loss:.4f}",
+            image=f"{row.image_loss:.4f}",
+            pixel=f"{row.pixel_loss:.4f}",
         )
     return history
 

@@ -112,6 +112,13 @@ Use `--datasets mvtec` or `--datasets visa` for a single run. All configuration
 values can instead be written directly into the YAML file. Existing artifacts
 are protected by default; pass `--overwrite` only for an intentional rerun.
 
+For Kaggle, upload `kaggle_train_object_agnostic_prompts.ipynb`, attach MVTec
+AD and VisA, enable a GPU, edit its first settings cell, and run all cells. The
+notebook validates the selected cohort before training and produces one
+downloadable ZIP containing the compact prompt artifacts. Training displays
+`tqdm` progress bars for epochs and batches, including current total, image,
+and pixel losses.
+
 ## Saved artifacts
 
 Each dataset writes one compact directory:
@@ -138,6 +145,7 @@ seed, source revision, configuration hash, and checkpoint checksum.
 
 ```text
 object_agnostic_prompt_attack_pipeline/
+|-- kaggle_train_object_agnostic_prompts.ipynb
 |-- configs/experiment.example.yaml
 |-- docs/
 |   |-- implementation_plan.md

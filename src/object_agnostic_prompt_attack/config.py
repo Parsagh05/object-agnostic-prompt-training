@@ -136,6 +136,7 @@ class TrainingConfig:
     epochs: int = 15
     batch_size: int = 8
     num_workers: int = 0
+    show_progress: bool = True
     seed: int = 111
     checkpoint_selection: str = "fixed_epoch"
     selected_epoch: int = 15

@@ -110,6 +110,7 @@ class TrainingIntegrationTests(unittest.TestCase):
                 selected_epoch=2,
                 batch_size=2,
                 num_workers=0,
+                show_progress=False,
             ),
             artifacts=ArtifactConfig(output_root=str(self.root / "artifacts")),
         )
