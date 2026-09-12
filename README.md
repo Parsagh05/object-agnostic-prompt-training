@@ -63,12 +63,68 @@ Only rows whose partition is `attack_train` are accepted; evaluation rows are
 never used for prompt fitting. A shared protocol CSV containing both datasets
 may be supplied to both options; each run selects only its own dataset rows.
 
-If no training manifest is supplied, the pipeline reconstructs the earlier
-deterministic protocol from each dataset's labeled test set. Within every
-category it balances normal and abnormal counts, shuffles each label stratum
-with seed `111`, reserves 50% for evaluation, and trains only on the remaining
-half. This fallback is necessary because the official MVTec training split has
-no anomalous images or defect masks.
+If no training manifest is supplied, the pipeline reconstructs the attack
+pipeline's deterministic protocol from each dataset's labeled test set. Within
+every category it shuffles each label stratum with seed `111`, reserves 50% for
+evaluation, and trains only on the remaining half. This fallback is necessary
+because the official MVTec training split has no anomalous images or defect
+masks.
+
+### Split protocol
+
+`data.split_protocol` selects how much of each category is used, and must equal
+the attack pipeline's `SPLIT_PROTOCOL`:
+
+| | `balanced` (default) | `full` |
+| --- | --- | --- |
+| category cohort | downsampled to `min(normal, abnormal)`, surplus discarded | every image kept |
+| class ratio | forced to 1:1 | the dataset's own |
+| MVTec prompt-training images | 448 | 864 |
+| label policy string | `per_dataset_category_equal_labels_v1` | `per_dataset_category_all_images_v1` |
+
+`balanced` is unchanged and reproduces the existing epoch-15 checkpoints
+exactly. Under both protocols the held-out count is derived from the images
+actually kept, so `full` holds out half of *each* label rather than half of the
+smaller one.
+
+### Training cohort
+
+`data.attack_train_fraction` keeps that share of each `attack_train` stratum, in
+the attack pipeline's rank order, and must equal its `ATTACK_TRAIN_FRACTION`
+(currently `1.00`). It does not move the train/evaluation boundary — it shrinks
+the cohort for data-efficiency runs, so a `0.25` attack setup is not paired with
+prompts fitted on the full half. Cohorts nest: the `0.05` set is a subset of the
+`0.10` set, and so on.
+
+| fraction | MVTec `balanced` | MVTec `full` |
+| --- | --- | --- |
+| `1.00` | 448 | 864 |
+| `0.50` | 232 | 441 |
+| `0.25` | 124 | 228 |
+| `0.10` | 58 | 99 |
+| `0.05` | 34 | 56 |
+
+Each combination writes to its own subdirectory, so prompt sets never overwrite
+each other. The suffix follows the attack pipeline's setup-ID convention
+(`0.25` → `_train25`), and a `balanced` run at the full fraction stays a bare
+`balanced`:
+
+```bash
+train-object-agnostic-prompts --config configs/experiment.example.yaml \
+  --datasets all --split-protocol full --attack-train-fraction 0.25 ...
+# -> artifacts/prompts/full_train25/{mvtec,visa}/
+```
+
+A fraction below `1.0` requires a manifest carrying `attack_train_rank` and
+`attack_train_stratum_size` — the automatic split derives the ranks itself, so
+only a hand-written manifest can fail this.
+
+When a training manifest *is* supplied, its `label_balance_policy`,
+`split_seed` and `evaluation_fraction` columns are checked against
+`data.split_protocol`, `training.seed` and `data.automatic_evaluation_fraction`.
+A disagreement fails the run rather than silently fitting prompts on a split the
+attack pipeline does not use. Manifests without those columns are accepted
+unchecked.
 
 ## Installation and use
 
@@ -121,25 +177,36 @@ and pixel losses.
 
 ## Saved artifacts
 
-Each dataset writes one compact directory:
+Each dataset writes one compact directory under its cohort
+(`<split_protocol>[_train<NN>]`):
 
 ```text
 artifacts/prompts/
-|-- mvtec/
-|   |-- prompts_epoch15.pt
-|   |-- training_history.csv
-|   |-- resolved_config.yaml
-|   `-- manifest.json
-`-- visa/
-    |-- prompts_epoch15.pt
-    |-- training_history.csv
-    |-- resolved_config.yaml
-    `-- manifest.json
+|-- balanced/
+|   |-- mvtec/
+|   |   |-- prompts_epoch15.pt
+|   |   |-- training_history.csv
+|   |   |-- resolved_config.yaml
+|   |   `-- manifest.json
+|   `-- visa/
+|       `-- ...
+|-- full/
+|   |-- mvtec/
+|   `-- visa/
+`-- full_train25/
+    |-- mvtec/
+    `-- visa/
 ```
 
 The checkpoint contains prompt tensors only. It does not duplicate the frozen
-CLIP backbone. The manifest records dataset identity, sample-manifest hash,
-seed, source revision, configuration hash, and checkpoint checksum.
+CLIP backbone. Its `prompt_config` records `split_protocol` alongside the prompt
+architecture, and the manifest records dataset identity, split protocol and
+label policy, sample-manifest hash, seed, source revision, configuration hash,
+and checkpoint checksum.
+
+Point the attack pipeline's `LEARNABLE_PROMPT_MVTEC_CHECKPOINT` and
+`LEARNABLE_PROMPT_VISA_CHECKPOINT` at the protocol directory matching its own
+`SPLIT_PROTOCOL`.
 
 ## Project layout
 

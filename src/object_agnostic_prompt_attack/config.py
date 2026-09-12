@@ -88,6 +88,30 @@ class ModelConfig:
             raise ValueError("device must be 'auto', 'cpu', or a CUDA device")
 
 
+SPLIT_PROTOCOLS = ("balanced", "full")
+
+# Mirrors the attack pipeline's LABEL_BALANCE_POLICY / FULL_LABEL_POLICY. The
+# protocol CSVs carry these strings, so a supplied manifest can be checked
+# against the protocol this run declares instead of trusting them to agree.
+LABEL_BALANCE_POLICIES = {
+    "balanced": "per_dataset_category_equal_labels_v1",
+    "full": "per_dataset_category_all_images_v1",
+}
+
+
+def attack_train_fraction_tag(fraction: float) -> str:
+    """``0.2`` -> ``"train20"``; a full cohort adds nothing.
+
+    Mirrors the attack pipeline's ``_fraction_tag`` so a prompt directory and
+    the setup ID that consumes it carry the same suffix.
+    """
+
+    if abs(float(fraction) - 1.0) < 1e-12:
+        return ""
+    percent = f"{float(fraction) * 100:g}"
+    return "train" + percent.replace(".", "p")
+
+
 @dataclass(frozen=True)
 class DataConfig:
     datasets: tuple[str, ...] = ("mvtec", "visa")
@@ -97,6 +121,16 @@ class DataConfig:
     mvtec_training_manifest: str | None = None
     visa_training_manifest: str | None = None
     automatic_evaluation_fraction: float = 0.5
+    # "balanced" downsamples every category to min(normal, abnormal) before
+    # splitting; "full" keeps every image and splits each label by the same
+    # fraction. Must match the attack pipeline's SPLIT_PROTOCOL.
+    split_protocol: str = "balanced"
+    # Share of each attack_train stratum used, taken in rank order. Does not
+    # move the train/evaluation boundary -- it shrinks the training cohort for
+    # data-efficiency runs. Must match the attack pipeline's
+    # ATTACK_TRAIN_FRACTION, so the prompts see the images the perturbation
+    # was optimized on rather than a larger cohort.
+    attack_train_fraction: float = 1.0
 
     def __post_init__(self) -> None:
         datasets = tuple(str(value).lower() for value in self.datasets)
@@ -110,6 +144,31 @@ class DataConfig:
             raise ValueError("only per_source_dataset training is enabled")
         if not 0 < self.automatic_evaluation_fraction < 1:
             raise ValueError("automatic_evaluation_fraction must be between 0 and 1")
+        if self.split_protocol not in SPLIT_PROTOCOLS:
+            raise ValueError(
+                f"split_protocol must be one of {SPLIT_PROTOCOLS}, got "
+                f"{self.split_protocol!r}"
+            )
+        if not 0 < self.attack_train_fraction <= 1:
+            raise ValueError("attack_train_fraction must be in (0, 1]")
+
+    @property
+    def label_balance_policy(self) -> str:
+        """The policy string the attack pipeline writes for this protocol."""
+
+        return LABEL_BALANCE_POLICIES[self.split_protocol]
+
+    @property
+    def cohort_directory(self) -> str:
+        """Directory segment identifying this split: ``full_train25``.
+
+        Composed the way the attack pipeline composes its setup ID, so a
+        prompt directory and the setups that load it read alike. ``balanced``
+        at a full fraction stays a bare ``balanced``.
+        """
+
+        tag = attack_train_fraction_tag(self.attack_train_fraction)
+        return f"{self.split_protocol}_{tag}" if tag else self.split_protocol
 
     def root_for(self, dataset: str) -> str | None:
         return self.mvtec_root if dataset == "mvtec" else self.visa_root

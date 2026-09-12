@@ -6,6 +6,7 @@ import csv
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 from pathlib import Path
 import random
 from typing import Iterable, Sequence
@@ -15,6 +16,8 @@ from PIL import Image
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
+
+from .config import SPLIT_PROTOCOLS
 
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
@@ -188,9 +191,32 @@ def automatic_attack_train_split(
     *,
     seed: int,
     evaluation_fraction: float,
+    protocol: str = "balanced",
+    attack_train_fraction: float = 1.0,
 ) -> list[PromptTrainingSample]:
-    """Match the previous category/label-balanced deterministic protocol."""
+    """Reconstruct the attack pipeline's deterministic protocol split.
 
+    ``balanced`` truncates each category to ``min(normal, abnormal)`` and
+    discards the surplus before splitting -- the historical protocol, which
+    this reproduces byte for byte. ``full`` keeps every image and splits each
+    label by the same fraction, so each category keeps its own class ratio.
+
+    The evaluation count is always derived from the number of images actually
+    kept. Deriving it from the pre-truncation minimum would, under ``full``,
+    hold out far too few images and hand the remainder to prompt training --
+    images the attack pipeline reserves for evaluation.
+
+    ``attack_train_fraction`` then keeps a prefix of each training stratum in
+    the shuffled order, which is the rank order the attack pipeline assigns and
+    subsets by. It shrinks the cohort without moving the split boundary.
+    """
+
+    if protocol not in SPLIT_PROTOCOLS:
+        raise ValueError(
+            f"protocol must be one of {SPLIT_PROTOCOLS}, got {protocol!r}"
+        )
+    if not 0 < attack_train_fraction <= 1:
+        raise ValueError("attack_train_fraction must be in (0, 1]")
     groups: dict[tuple[str, str, int], list[PromptTrainingSample]] = {}
     for sample in samples:
         groups.setdefault((sample.dataset, sample.category, sample.label), []).append(sample)
@@ -207,16 +233,108 @@ def automatic_attack_train_split(
         for label, group in ((0, normal), (1, abnormal)):
             shuffled = sorted(group, key=lambda sample: sample.protocol_id)
             random.Random(_stable_seed(seed, dataset, category, label)).shuffle(shuffled)
-            balanced = shuffled[:balanced_size]
+            keep = balanced_size if protocol == "balanced" else len(shuffled)
+            kept = shuffled[:keep]
+            # Must follow `keep`, not `balanced_size`: under "full" the two
+            # differ, and using the minimum would leak evaluation images into
+            # the prompt-training cohort.
+            basis = len(kept)
             n_evaluation = min(
-                max(int(round(balanced_size * evaluation_fraction)), 1),
-                balanced_size - 1,
+                max(int(round(basis * evaluation_fraction)), 1),
+                basis - 1,
             )
-            selected.extend(balanced[n_evaluation:])
+            training = kept[n_evaluation:]
+            # Rank order is the shuffled order, so the prefix taken here is the
+            # same set the attack pipeline keeps via attack_train_rank.
+            cohort = max(1, math.ceil(len(training) * attack_train_fraction))
+            selected.extend(training[:cohort])
     selected.sort(key=lambda sample: sample.protocol_id)
     if not selected:
         raise RuntimeError("Automatic prompt-training split is empty")
     return selected
+
+
+def _assert_manifest_provenance(
+    rows: Sequence[dict[str, str]],
+    manifest_path: Path,
+    *,
+    expected_policy: str | None,
+    expected_seed: int | None,
+    expected_evaluation_fraction: float | None,
+) -> None:
+    """Check a manifest's recorded split settings against this run's config.
+
+    The attack pipeline stamps ``label_balance_policy``, ``split_seed`` and
+    ``evaluation_fraction`` onto every protocol row. Nothing else links the two
+    repositories, so a disagreement here is the one detectable signature of
+    prompts trained against a different split than the attack will use. Columns
+    that a manifest does not carry are skipped rather than rejected.
+    """
+
+    def distinct(column: str) -> set[str]:
+        return {row[column].strip() for row in rows if row.get(column, "").strip()}
+
+    if expected_policy is not None:
+        found = distinct("label_balance_policy")
+        if found and found != {expected_policy}:
+            raise ValueError(
+                f"Manifest label_balance_policy {sorted(found)} does not match the "
+                f"configured split_protocol ({expected_policy!r}): {manifest_path}. "
+                "Set data.split_protocol to the protocol this manifest was built "
+                "under, or supply the matching manifest."
+            )
+    if expected_seed is not None:
+        found = distinct("split_seed")
+        if found and found != {str(expected_seed)}:
+            raise ValueError(
+                f"Manifest split_seed {sorted(found)} does not match "
+                f"training.seed ({expected_seed}): {manifest_path}"
+            )
+    if expected_evaluation_fraction is not None:
+        found = distinct("evaluation_fraction")
+        if found:
+            values = {float(value) for value in found}
+            if len(values) != 1 or abs(
+                next(iter(values)) - expected_evaluation_fraction
+            ) > 1e-12:
+                raise ValueError(
+                    f"Manifest evaluation_fraction {sorted(values)} does not match "
+                    f"data.automatic_evaluation_fraction "
+                    f"({expected_evaluation_fraction}): {manifest_path}"
+                )
+
+
+def _apply_attack_train_fraction(
+    rows: list[dict[str, str]], manifest_path: Path, fraction: float
+) -> list[dict[str, str]]:
+    """Keep the rank prefix of each stratum, as the attack pipeline does.
+
+    ``select_attack_train_fraction`` keeps every row whose ``attack_train_rank``
+    is at most ``ceil(attack_train_stratum_size * fraction)``. Both columns are
+    written by the attack pipeline, so this reproduces its cohort exactly rather
+    than re-deriving one.
+    """
+
+    if abs(fraction - 1.0) < 1e-12:
+        return rows
+    required = ("attack_train_rank", "attack_train_stratum_size")
+    missing = [column for column in required if not any(row.get(column) for row in rows)]
+    if missing:
+        raise ValueError(
+            f"attack_train_fraction={fraction} needs {sorted(missing)} in the "
+            f"manifest, which does not carry them: {manifest_path}. Use a "
+            "manifest written by the attack pipeline, or leave the fraction at 1.0."
+        )
+    kept = []
+    for row in rows:
+        stratum = int(row["attack_train_stratum_size"])
+        if int(row["attack_train_rank"]) <= max(1, math.ceil(stratum * fraction)):
+            kept.append(row)
+    if not kept:
+        raise ValueError(
+            f"attack_train_fraction={fraction} selected no rows from {manifest_path}"
+        )
+    return kept
 
 
 def load_attack_train_manifest(
@@ -225,6 +343,10 @@ def load_attack_train_manifest(
     dataset: str,
     root: str | Path,
     discovered: Sequence[PromptTrainingSample],
+    expected_policy: str | None = None,
+    expected_seed: int | None = None,
+    expected_evaluation_fraction: float | None = None,
+    attack_train_fraction: float = 1.0,
 ) -> list[PromptTrainingSample]:
     manifest_path = Path(path).expanduser().resolve()
     if not manifest_path.is_file():
@@ -253,6 +375,14 @@ def load_attack_train_manifest(
             f"Manifest contains no attack_train rows for dataset {dataset!r}: "
             f"{manifest_path}"
         )
+    _assert_manifest_provenance(
+        rows,
+        manifest_path,
+        expected_policy=expected_policy,
+        expected_seed=expected_seed,
+        expected_evaluation_fraction=expected_evaluation_fraction,
+    )
+    rows = _apply_attack_train_fraction(rows, manifest_path, attack_train_fraction)
     by_id = {sample.protocol_id: sample for sample in discovered}
     if len(by_id) != len(discovered):
         raise RuntimeError("Discovered dataset contains duplicate protocol IDs")

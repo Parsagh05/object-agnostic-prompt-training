@@ -5,7 +5,7 @@ This project saves prompt-training artifacts only.
 ## Directory structure
 
 ```text
-artifacts/prompts/
+artifacts/prompts/<split_protocol>[_train<NN>]/
 |-- mvtec/
 |   |-- prompts_epoch15.pt
 |   |-- training_history.csv
@@ -18,13 +18,18 @@ artifacts/prompts/
     `-- manifest.json
 ```
 
+`<split_protocol>` is `balanced` or `full`, followed by the attack-train
+fraction when it is below 1.0 (`full_train25`). No two cohorts share a
+directory, so a run under one cannot overwrite another's checkpoints.
+
 ## Checkpoint contents
 
 Each `prompts_epoch15.pt` contains:
 
 - `normal_context`;
 - `abnormal_context`;
-- prompt architecture metadata;
+- prompt architecture metadata, including `split_protocol` and
+  `attack_train_fraction`;
 - dataset name;
 - epoch and seed.
 
@@ -40,6 +45,8 @@ matching shallow prompt learner.
 Each `manifest.json` records:
 
 - dataset and training-manifest identity;
+- `split_protocol`, its `label_balance_policy` string, and
+  `attack_train_fraction`;
 - sample-manifest SHA-256;
 - prompt configuration;
 - optimizer configuration;

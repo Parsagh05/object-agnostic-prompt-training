@@ -56,6 +56,22 @@ class DatasetRunResult:
     history: tuple[EpochHistory, ...]
 
 
+def dataset_output_directory(config: ExperimentConfig, dataset: str) -> Path:
+    """``<output_root>/<cohort>/<dataset>``, e.g. ``prompts/full_train25/mvtec``.
+
+    The cohort segment keeps checkpoints fitted under different protocols or
+    training fractions side by side instead of overwriting one another, and
+    makes the split a checkpoint came from visible from its path alone. A
+    balanced, full-fraction run stays a bare ``balanced``.
+    """
+
+    return (
+        Path(config.artifacts.output_root).expanduser().resolve()
+        / config.data.cohort_directory
+        / dataset
+    )
+
+
 def seed_everything(seed: int) -> None:
     os.environ.setdefault("PYTHONHASHSEED", str(seed))
     random.seed(seed)
@@ -90,6 +106,10 @@ def prepare_training_samples(
             dataset=dataset,
             root=root,
             discovered=discovered,
+            expected_policy=config.data.label_balance_policy,
+            expected_seed=config.training.seed,
+            expected_evaluation_fraction=config.data.automatic_evaluation_fraction,
+            attack_train_fraction=config.data.attack_train_fraction,
         )
         source_manifest_sha = sha256_file(Path(manifest_value).expanduser().resolve())
     else:
@@ -97,6 +117,8 @@ def prepare_training_samples(
             discovered,
             seed=config.training.seed,
             evaluation_fraction=config.data.automatic_evaluation_fraction,
+            protocol=config.data.split_protocol,
+            attack_train_fraction=config.data.attack_train_fraction,
         )
         source_manifest_sha = None
     records, selected_sha = canonical_manifest(selected, root)
@@ -275,7 +297,7 @@ def save_dataset_artifacts(
     history: Sequence[EpochHistory],
     config: ExperimentConfig,
 ) -> DatasetRunResult:
-    output = Path(config.artifacts.output_root).expanduser().resolve() / dataset
+    output = dataset_output_directory(config, dataset)
     output.mkdir(parents=True, exist_ok=True)
     checkpoint = output / f"prompts_epoch{config.training.selected_epoch}.pt"
     checkpoint_sha = save_prompt_checkpoint(
@@ -284,7 +306,13 @@ def save_dataset_artifacts(
         dataset=dataset,
         epoch=config.training.selected_epoch,
         seed=config.training.seed,
-        prompt_config=asdict(config.prompt),
+        # The attack pipeline reads prompt_config through .get(), so the extra
+        # key is inert there while recording which split the prompts saw.
+        prompt_config={
+            **asdict(config.prompt),
+            "split_protocol": config.data.split_protocol,
+            "attack_train_fraction": config.data.attack_train_fraction,
+        },
         training_config=asdict(config.training),
         sample_manifest_sha256=sample_manifest_sha,
     )
@@ -326,6 +354,9 @@ def save_dataset_artifacts(
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "dataset": dataset,
         "training_mode": config.data.training_mode,
+        "split_protocol": config.data.split_protocol,
+        "label_balance_policy": config.data.label_balance_policy,
+        "attack_train_fraction": config.data.attack_train_fraction,
         "sample_count": len(samples),
         "label_counts": label_counts,
         "category_counts": category_counts,
@@ -376,7 +407,7 @@ def run_dataset_training(
     *,
     model_factory: Callable[..., PublicCLIPPromptModel] = build_public_clip_prompt_model,
 ) -> DatasetRunResult:
-    output = Path(config.artifacts.output_root).expanduser().resolve() / dataset
+    output = dataset_output_directory(config, dataset)
     expected_outputs = {
         output / f"prompts_epoch{config.training.selected_epoch}.pt",
         output / "training_history.csv",
@@ -415,6 +446,9 @@ def validate_dataset_inputs(config: ExperimentConfig, dataset: str) -> dict[str,
     samples, _records, sample_sha, source_sha = prepare_training_samples(config, dataset)
     return {
         "dataset": dataset,
+        "split_protocol": config.data.split_protocol,
+        "attack_train_fraction": config.data.attack_train_fraction,
+        "output_directory": str(dataset_output_directory(config, dataset)),
         "sample_count": len(samples),
         "normal_count": sum(sample.label == 0 for sample in samples),
         "abnormal_count": sum(sample.label == 1 for sample in samples),

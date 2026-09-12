@@ -28,6 +28,18 @@ data:
   visa_training_manifest: null
   # Used only when an existing attack_train manifest is not supplied.
   automatic_evaluation_fraction: 0.5
+  # balanced: downsample each category to min(normal, abnormal), then split.
+  # full:     keep every image and split each label by the same fraction.
+  # Must equal the attack pipeline's SPLIT_PROTOCOL. Selects the output
+  # subdirectory and, when a manifest is supplied, is checked against its
+  # label_balance_policy column.
+  split_protocol: balanced
+  # Share of each attack_train stratum to fit prompts on, taken in rank order.
+  # Must equal the attack pipeline's ATTACK_TRAIN_FRACTION (currently 1.00), so
+  # a data-efficiency run does not pair a small perturbation cohort with
+  # full-cohort prompts. Any value below 1.0 is appended to the output
+  # directory (0.25 -> balanced_train25), matching its setup-ID convention.
+  attack_train_fraction: 1.0
 
 training:
   objective: anomalyclip_image_ce_pixel_focal_dice

@@ -24,6 +24,16 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--visa-training-manifest")
     parser.add_argument("--output-root")
     parser.add_argument("--device")
+    parser.add_argument(
+        "--split-protocol",
+        choices=("balanced", "full"),
+        help="Split protocol; must match the attack pipeline's SPLIT_PROTOCOL.",
+    )
+    parser.add_argument(
+        "--attack-train-fraction",
+        type=float,
+        help="Share of each attack_train stratum to use; match ATTACK_TRAIN_FRACTION.",
+    )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--validate-only", action="store_true")
     return parser
@@ -61,6 +71,12 @@ def main(argv: list[str] | None = None) -> None:
             ),
             visa_training_manifest=(
                 args.visa_training_manifest or config.data.visa_training_manifest
+            ),
+            split_protocol=args.split_protocol or config.data.split_protocol,
+            attack_train_fraction=(
+                config.data.attack_train_fraction
+                if args.attack_train_fraction is None
+                else args.attack_train_fraction
             ),
         ),
         artifacts=replace(
