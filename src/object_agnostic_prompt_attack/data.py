@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import math
@@ -186,6 +186,52 @@ def _stable_seed(*parts: object) -> int:
     return int.from_bytes(digest[:8], "big") & 0x7FFFFFFF
 
 
+def automatic_protocol_split(
+    samples: Sequence[PromptTrainingSample],
+    *,
+    seed: int,
+    evaluation_fraction: float,
+    protocol: str = "balanced",
+    attack_train_fraction: float = 1.0,
+) -> tuple[list[PromptTrainingSample], list[PromptTrainingSample]]:
+    """Both halves of the protocol split: ``(attack_train, evaluation)``.
+
+    One implementation for both partitions, so the evaluation half can never
+    drift from the complement of the training half. ``attack_train_fraction``
+    applies only to the training side; the evaluation half is the fixed set the
+    attack pipeline scores against and is never subsetted.
+    """
+
+    train, evaluation = _split_partitions(
+        samples,
+        seed=seed,
+        evaluation_fraction=evaluation_fraction,
+        protocol=protocol,
+        attack_train_fraction=attack_train_fraction,
+    )
+    overlap = {s.protocol_id for s in train} & {s.protocol_id for s in evaluation}
+    if overlap:
+        raise RuntimeError(f"Protocol split overlaps: {sorted(overlap)[:5]}")
+    return train, evaluation
+
+
+def automatic_evaluation_split(
+    samples: Sequence[PromptTrainingSample],
+    *,
+    seed: int,
+    evaluation_fraction: float,
+    protocol: str = "balanced",
+) -> list[PromptTrainingSample]:
+    """The held-out half: what the attack pipeline scores on, never trained on."""
+
+    return automatic_protocol_split(
+        samples,
+        seed=seed,
+        evaluation_fraction=evaluation_fraction,
+        protocol=protocol,
+    )[1]
+
+
 def automatic_attack_train_split(
     samples: Sequence[PromptTrainingSample],
     *,
@@ -211,6 +257,25 @@ def automatic_attack_train_split(
     subsets by. It shrinks the cohort without moving the split boundary.
     """
 
+    return _split_partitions(
+        samples,
+        seed=seed,
+        evaluation_fraction=evaluation_fraction,
+        protocol=protocol,
+        attack_train_fraction=attack_train_fraction,
+    )[0]
+
+
+def _split_partitions(
+    samples: Sequence[PromptTrainingSample],
+    *,
+    seed: int,
+    evaluation_fraction: float,
+    protocol: str = "balanced",
+    attack_train_fraction: float = 1.0,
+) -> tuple[list[PromptTrainingSample], list[PromptTrainingSample]]:
+    """The shared core: returns ``(attack_train, evaluation)``."""
+
     if protocol not in SPLIT_PROTOCOLS:
         raise ValueError(
             f"protocol must be one of {SPLIT_PROTOCOLS}, got {protocol!r}"
@@ -222,6 +287,7 @@ def automatic_attack_train_split(
         groups.setdefault((sample.dataset, sample.category, sample.label), []).append(sample)
     category_keys = sorted({(dataset, category) for dataset, category, _ in groups})
     selected: list[PromptTrainingSample] = []
+    held_out: list[PromptTrainingSample] = []
     for dataset, category in category_keys:
         normal = groups.get((dataset, category, 0), [])
         abnormal = groups.get((dataset, category, 1), [])
@@ -244,14 +310,22 @@ def automatic_attack_train_split(
                 basis - 1,
             )
             training = kept[n_evaluation:]
+            # The evaluation half is never subsetted: it is the fixed set the
+            # attack pipeline scores against.
+            held_out.extend(kept[:n_evaluation])
             # Rank order is the shuffled order, so the prefix taken here is the
             # same set the attack pipeline keeps via attack_train_rank.
             cohort = max(1, math.ceil(len(training) * attack_train_fraction))
             selected.extend(training[:cohort])
     selected.sort(key=lambda sample: sample.protocol_id)
+    held_out.sort(key=lambda sample: sample.protocol_id)
     if not selected:
         raise RuntimeError("Automatic prompt-training split is empty")
-    return selected
+    if not held_out:
+        raise RuntimeError("Automatic evaluation split is empty")
+    return selected, [
+        replace(sample, partition="evaluation") for sample in held_out
+    ]
 
 
 def _assert_manifest_provenance(

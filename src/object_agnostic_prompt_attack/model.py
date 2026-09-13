@@ -189,8 +189,25 @@ class PublicCLIPPromptModel(nn.Module):
         global_features: Tensor,
         patch_features: Sequence[Tensor],
         output_size: tuple[int, int],
+        text_features: Tensor | None = None,
     ) -> tuple[Tensor, list[Tensor]]:
-        text_features = self.encode_prompts()
+        """Image logits and per-layer similarity maps for one text pair.
+
+        ``text_features`` is a normalized ``[2, D]`` matrix, row order
+        ``normal, abnormal``. Supplying it scores an arbitrary prompt pair --
+        a frozen ensemble's prototypes, or a checkpoint other than this
+        model's own -- through exactly the path training used. The default
+        encodes this model's learnable contexts.
+        """
+        if text_features is None:
+            text_features = self.encode_prompts()
+        elif text_features.shape[0] != 2:
+            raise ValueError(
+                f"text_features must be [2, D] (normal, abnormal), got "
+                f"{tuple(text_features.shape)}"
+            )
+        else:
+            text_features = F.normalize(text_features.float().to(self.device), dim=-1)
         image_logits = global_features @ text_features.t() / self.model_config.temperature
         similarity_maps: list[Tensor] = []
         selected = set(self.model_config.feature_map_indices)

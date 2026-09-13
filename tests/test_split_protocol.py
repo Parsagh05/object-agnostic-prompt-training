@@ -12,6 +12,8 @@ from object_agnostic_prompt_attack.config import (
 from object_agnostic_prompt_attack.data import (
     PromptTrainingSample,
     automatic_attack_train_split,
+    automatic_evaluation_split,
+    automatic_protocol_split,
     load_attack_train_manifest,
 )
 from object_agnostic_prompt_attack.training import dataset_output_directory
@@ -189,6 +191,78 @@ class AttackTrainFractionTests(unittest.TestCase):
         for fraction in (0.0, -0.5, 1.5):
             with self.assertRaises(ValueError):
                 self.cohort(fraction)
+
+
+class EvaluationSplitTests(unittest.TestCase):
+    """The held-out half must be exactly the complement of the trained half."""
+
+    def both(self, protocol="balanced", fraction=1.0):
+        return automatic_protocol_split(
+            make_samples(MVTEC_TEST_COUNTS),
+            seed=111,
+            evaluation_fraction=0.5,
+            protocol=protocol,
+            attack_train_fraction=fraction,
+        )
+
+    def test_halves_never_overlap(self):
+        for protocol in ("balanced", "full"):
+            train, evaluation = self.both(protocol)
+            ids_train = {s.protocol_id for s in train}
+            ids_eval = {s.protocol_id for s in evaluation}
+            self.assertEqual(ids_train & ids_eval, set(), protocol)
+
+    def test_halves_partition_the_kept_images(self):
+        train, evaluation = self.both("full")
+        # "full" keeps every test image, so the two halves must cover all 1725.
+        self.assertEqual(len(train) + len(evaluation), 1725)
+        self.assertEqual(len(train), 864)
+        self.assertEqual(len(evaluation), 861)
+
+    def test_balanced_halves_cover_only_the_balanced_cohort(self):
+        train, evaluation = self.both("balanced")
+        self.assertEqual(len(train), 448)
+        self.assertEqual(len(train) + len(evaluation), 894)
+
+    def test_evaluation_half_is_never_subsetted_by_the_train_fraction(self):
+        """A cheaper training cohort must still be scored on the same images."""
+
+        _, full_eval = self.both("full", fraction=1.0)
+        for fraction in (0.5, 0.25, 0.05):
+            train, evaluation = self.both("full", fraction=fraction)
+            self.assertEqual(
+                [s.protocol_id for s in evaluation],
+                [s.protocol_id for s in full_eval],
+                fraction,
+            )
+            self.assertLess(len(train), 864)
+
+    def test_evaluation_half_carries_its_partition_label(self):
+        _, evaluation = self.both("full")
+        self.assertEqual({s.partition for s in evaluation}, {"evaluation"})
+
+    def test_both_labels_present_in_the_evaluation_half(self):
+        for protocol in ("balanced", "full"):
+            _, evaluation = self.both(protocol)
+            self.assertEqual(count_by_label(evaluation).keys(), {0, 1})
+            self.assertTrue(all(v > 0 for v in count_by_label(evaluation).values()))
+
+    def test_convenience_wrapper_matches(self):
+        _, evaluation = self.both("full")
+        direct = automatic_evaluation_split(
+            make_samples(MVTEC_TEST_COUNTS),
+            seed=111, evaluation_fraction=0.5, protocol="full",
+        )
+        self.assertEqual([s.protocol_id for s in direct],
+                         [s.protocol_id for s in evaluation])
+
+    def test_attack_train_wrapper_is_unchanged(self):
+        train, _ = self.both("balanced")
+        legacy = automatic_attack_train_split(
+            make_samples(MVTEC_TEST_COUNTS), seed=111, evaluation_fraction=0.5
+        )
+        self.assertEqual([s.protocol_id for s in legacy],
+                         [s.protocol_id for s in train])
 
 
 class ConfigTests(unittest.TestCase):
