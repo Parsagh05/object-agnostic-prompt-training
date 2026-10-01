@@ -57,8 +57,12 @@ class ModelConfig:
     clip_model_name: str = "ViT-L/14@336px"
     clip_download_root: str | None = None
     image_size: int = 518
-    feature_layers: tuple[int, ...] = (6, 12, 18, 24)
-    feature_map_indices: tuple[int, ...] = (0, 1, 2, 3)
+    # Layer 24 only: its patch tokens share the final-layer space of the CLS
+    # token the image score uses, so one text pair serves both. Training on
+    # 6/12/18/24 too left the image-level AUROC at 30 (MVTec) / 56 (VisA);
+    # layer 24 alone gives 77 / 84 with pixel AUROC unchanged (~92-94).
+    feature_layers: tuple[int, ...] = (24,)
+    feature_map_indices: tuple[int, ...] = (0,)
     temperature: float = 0.07
     use_dpam: bool = False
     device: str = "auto"

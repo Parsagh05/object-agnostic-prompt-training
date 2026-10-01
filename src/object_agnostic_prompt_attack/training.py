@@ -312,6 +312,9 @@ def save_dataset_artifacts(
             **asdict(config.prompt),
             "split_protocol": config.data.split_protocol,
             "attack_train_fraction": config.data.attack_train_fraction,
+            # Which visual layers the prompts were fitted on, so a consumer can
+            # tell a layer-24 checkpoint from one trained on 6/12/18/24.
+            "feature_layers": list(config.model.feature_layers),
         },
         training_config=asdict(config.training),
         sample_manifest_sha256=sample_manifest_sha,

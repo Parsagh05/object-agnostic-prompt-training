@@ -51,9 +51,14 @@ all-zero masks.
 Only the two shallow prompt tensors are optimized. AnomalyCLIP's deep or
 compound text-prompt tuning is explicitly disabled.
 
-Patch features are read from frozen public-CLIP transformer layers
-`6, 12, 18, 24` using forward hooks. Their normal/abnormal similarity maps
-provide the pixel supervision without modifying the visual architecture.
+Patch features are read from frozen public-CLIP transformer layer `24` using
+a forward hook. Its normal/abnormal similarity map provides the pixel
+supervision without modifying the visual architecture. Layer 24 shares the
+final-layer space of the CLS token the image score uses; training on layers
+`6, 12, 18, 24` instead left the image-level AUROC at 30.1 (MVTec) / 55.7
+(VisA) on the held-out half, against 77.4 / 84.2 for layer 24 alone, with pixel
+AUROC about the same. Checkpoints record the layers in
+`prompt_config["feature_layers"]`.
 
 ## Data protocol
 

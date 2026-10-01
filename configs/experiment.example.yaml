@@ -13,8 +13,10 @@ model:
   clip_model_name: "ViT-L/14@336px"
   clip_download_root: null
   image_size: 518
-  feature_layers: [6, 12, 18, 24]
-  feature_map_indices: [0, 1, 2, 3]
+  # Layer 24 only (see ModelConfig). For the former four-layer training use
+  # feature_layers: [6, 12, 18, 24] with feature_map_indices: [0, 1, 2, 3].
+  feature_layers: [24]
+  feature_map_indices: [0]
   temperature: 0.07
   use_dpam: false
   device: auto
